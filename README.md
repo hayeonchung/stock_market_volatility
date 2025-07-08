@@ -12,10 +12,10 @@ This project explores whether sentiment extracted from financial news headlines 
 - AAPL Stock Data: [Yahoo Finance](https://finance.yahoo.com/quote/AAPL)
 - News Headlines: [Reddit News on Kaggle](https://www.kaggle.com/datasets/therohk/million-headlines)
 
-## Structure
-- `data/`: Raw datasets
-- `code/`: R Markdown files for sentiment scoring, modeling, and plotting
-- `output/`: Final technical report
+## Files Included
+
+- `Stock Market Volatility and News Sentiment Analysis.Rmd` – R Markdown file with full code and explanations
+- `Stock-Market-Volatility-and-News-Sentiment-Analysis.pdf` – Knitted version of the report
 
 ## Tools Used
 - R (`tidyverse`, `tidytext`, `rugarch`, `ggplot2`)
