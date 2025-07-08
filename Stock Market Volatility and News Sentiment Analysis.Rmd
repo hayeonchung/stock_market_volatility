@@ -1,0 +1,120 @@
+---
+title: "Stock Market Volatility and News Sentiment Analysis"
+author: "Hayeon Chung"
+output: pdf_document
+date: "2025-07-08"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(tidyquant)
+library(quantmod)
+library(lubridate)
+library(rugarch)
+library(tidytext)
+library(textdata)
+library(ggplot2)
+library(readr)
+library(dplyr)
+```
+
+# 1. Introduction
+In the fast-paced world of finance, understanding the drivers of stock market volatility is essential for investors and risk managers alike. One emerging area of interest is the relationship between public sentiment and stock price fluctuations. This project explores whether sentiment extracted from financial news headlines can serve as a meaningful predictor of volatility in equity markets, specifically focusing on Apple Inc. (AAPL). Leveraging a blend of natural language processing and time series modeling, this analysis combines sentiment scores with financial returns to assess their interplay and potential predictive power.
+
+# 2. Data Collection
+
+## 2.1 Stock Data (AAPL)
+To conduct this analysis, I retrieved historical stock price data for AAPL using the tq_get() function from the tidyquant package, spanning from January 1, 2015 to the current date. I extracted and renamed the adjusted closing price as close, which serves as the basis for calculating daily returns.
+```{r get-stock-data}
+aapl_stock <- tq_get("AAPL", from = "2015-01-01", to = Sys.Date()) %>%
+  select(date, adjusted) %>%
+  rename(close = adjusted)
+```
+
+## 2.2 News Sentiment Data 
+Complementary to the stock data, we incorporated a publicly available dataset of financial news headlines from Kaggle. This dataset contains daily Reddit headlines associated with public companies. To prepare the data, I grouped the headlines by date and concatenated them into a single string to facilitate text-based sentiment analysis.
+
+```{r load-news-data, message=FALSE}
+# Assuming the file is in your working directory
+news <- read_csv("RedditNews.csv")
+
+# Preprocessing: combine all headlines into one text per day
+news_by_day <- news %>%
+  group_by(Date) %>%
+  summarise(all_text = paste(News, collapse = " "))
+```
+
+# 3. Sentiment Analysis 
+Using the Bing sentiment lexicon, I performed tokenization and matched each word with a polarity label (positive or negative). I then computed a net sentiment score for each day by subtracting the number of negative words from the number of positive words. This score was intended to represent the overall emotional tone of the news on that day.
+```{r sentiment-analysis}
+# Load lexicon and calculate sentiment score
+bing <- get_sentiments("bing")
+
+sentiment_scores <- news_by_day %>%
+  unnest_tokens(word, all_text) %>%
+  inner_join(bing, by = "word") %>%
+  count(Date, sentiment) %>%
+  pivot_wider(names_from = sentiment, values_from = n, values_fill = 0) %>%
+  mutate(sentiment_score = positive - negative)
+```
+
+# 4. Merge Sentiment and Stock Data 
+Next, I merged the sentiment scores with the stock return data based on the date. Log daily returns were computed using the adjusted closing prices. Aligning these datasets enabled us to explore how fluctuations in public sentiment might align with or precede movements in AAPL’s stock performance.
+```{r merge-data}
+stock_sentiment <- aapl_stock %>%
+  mutate(Date = as.Date(date)) %>%
+  left_join(sentiment_scores, by = "Date") %>%
+  arrange(Date) %>%
+  mutate(returns = log(close / lag(close)))
+```
+
+# 5. Volatility Modeling with GARCH
+To capture the time-varying nature of financial volatility, I implemented a GARCH(1,1) model using the rugarch package. GARCH models are a staple in financial econometrics, especially for modeling return series that exhibit volatility clustering—a common feature in equity markets. Diagnostic plots confirmed that the GARCH model fit the return data well, with conditional standard deviations aligning closely with observed volatility patterns. These results provided a robust framework for examining the potential influence of sentiment on volatility levels.
+```{r garch-model, fig.width=10, fig.height=6}
+# Remove NA and prepare return series
+garch_data <- na.omit(stock_sentiment$returns)
+
+spec <- ugarchspec(
+  variance.model = list(model = "sGARCH", garchOrder = c(1, 1)),
+  mean.model = list(armaOrder = c(1, 0)),
+  distribution.model = "norm"
+)
+
+fit <- ugarchfit(spec = spec, data = garch_data)
+
+plot(fit, which = "all")
+```
+The top-left panel shows the actual return series with two conditional standard deviation bands, effectively capturing periods of heightened volatility. The Value-at-Risk plot (top-middle) overlays 1 percent VaR limits, useful for assessing extreme downside risk. The ACF plots of raw, squared, and absolute returns (top-right and middle row) reveal that autocorrelation in volatility has largely been absorbed by the model. The empirical density and QQ plot (middle-right and bottom-left) indicate that residuals are approximately normally distributed, albeit with slight deviations in the tails—common in financial data. Lastly, the news impact curve (bottom-right) shows the asymmetric response of volatility to past shocks, consistent with GARCH theory. Together, these diagnostics suggest the GARCH model effectively captures volatility clustering and is well-calibrated for further analysis.
+
+# 6. Sentiment vs. Volatility Visualization 
+To visualize the relationship between sentiment and volatility, I overlaid daily absolute returns (as a proxy for volatility) and scaled sentiment scores on the same time series plot. This visualization revealed that spikes in volatility often coincided with dips in sentiment, suggesting a potential inverse relationship. While not conclusive, this graphical analysis provided valuable intuition for interpreting how shifts in public tone may correspond to market instability.
+```{r plot-sentiment-volatility, warning=FALSE}
+# Filter for overlapping dates to ensure sentiment and returns are aligned
+common_dates <- intersect(stock_sentiment$Date, sentiment_scores$Date)
+
+# Filter merged data to shared timeline only
+stock_sentiment_filtered <- stock_sentiment %>%
+  filter(Date %in% common_dates)
+
+# Assign volatility values from GARCH model
+stock_sentiment_filtered$volatility <- sigma(fit)[1:nrow(stock_sentiment_filtered)]
+
+# Plot returns vs sentiment
+ggplot(stock_sentiment_filtered, aes(x = Date)) +
+  geom_line(aes(y = abs(returns)), color = "blue", alpha = 0.6) +
+  geom_line(aes(y = sentiment_score / 100), color = "red", alpha = 0.6) +
+  labs(
+    title = "Daily Returns vs News Sentiment",
+    y = "Returns (blue) / Sentiment (red)"
+  ) + theme_minimal()
+```
+The plot above presents a time-aligned visualization of daily stock returns (in blue) and news sentiment scores (in red) over the same date range, offering a clearer view of their potential relationship. With the data now properly merged by date, I can directly compare the fluctuations in market performance with the tone of daily news. The blue line shows that stock returns generally hover near zero with intermittent spikes and drops, characteristic of typical short-term market behavior. In contrast, the red sentiment line, which has been scaled and normalized, exhibits larger swings and remains predominantly negative throughout the observed period. 
+
+This trend suggests that the news headlines during this time were more frequently negative, or that the sentiment lexicon used may have assigned stronger weights to negative terms. Notably, there are moments when extreme sentiment scores appear to coincide with sharp market movements, hinting at a possible connection between public sentiment and financial volatility. While this visualization does not confirm a strong correlation, it offers an insightful exploratory perspective. It lays the groundwork for more rigorous analyses, such as calculating correlation coefficients or building predictive models that incorporate lagged sentiment data to assess its potential impact on market behavior.
+
+# 7. Insights and Recommendations
+This analysis suggests that sentiment extracted from financial news can serve as a meaningful supplementary input in volatility modeling. Notably, periods of heightened negative sentiment often corresponded with increased return volatility. Additionally, the GARCH(1,1) model effectively captured the underlying structure of return variance, validating its use in this context.
+
+For future work, I recommend exploring lagged sentiment effects to test predictive relationships, applying machine learning models to improve sentiment classification accuracy, and extending the study across multiple tickers to enhance generalizability and assess sector-specific effects. 
+
